@@ -1,42 +1,97 @@
-1. DB_Download
+# 🧬 Proximity-Final
 
-    1) Human_PPI ()
-        STRING (https://string-db.org/cgi/download?sessionId=bxgqh7YBMvBD&species_text=Homo+sapiens&settings_expanded=0&min_download_score=0&filter_redundant_pairs=0&delimiter_type=txt)에서 "9606.protein.links.v12.0.txt.gz" 다운로드
-        build_ppi_db()로 Human_PPI network edge(473860개) 업로드
+Network-based **Herbal Medicine – Target – Disease** relationship analysis using **STRING Human PPI** and **HERB 2.0 (HIT)** database.  
+Implements efficient **Network Proximity** (A–B set distance & Z-score) calculation with **incremental memmap caching**.
 
-    2) Herb, Ingredient, Target, Formula, Disease Information crawling
-        HERB 2.0 (HIT) - http://47.92.70.12/Download/
-        - Herb (~ HERB007263)
-        - Ingredient (~ HBIN049258)
-        - Formula (~ HBFO006743)
-        - Target (~ HBTAR015515, ENSG 표기)
-        - Disease (~ HBDIS030170)
-        - Meta-analysis (HBMA000001)
-        - Clinical trial (HBCT000001)
-        - Reference (HBREF000001)
-        - Experiment (HBEXP000002)
+---
 
-2. DB_Construction
-    - Human_PPI
-    - Herb 2.0_edge
-    - Herb 2.0_node
-    - Filtering (F-H-I-T, D-T edge만 살림, ADME 기준 통과한 성분만 살림)
-   ADME Screening Criteria (Balanced Profile)
-    ------------------------------------------
-    - OB_score ≥ 30  (None values are treated as neutral, not fail)
-    - Drug_likeness ≥ 0.18
-    - MolWt ≤ 500
-    - NumHAcceptors ≤ 10
-    - NumHDonors ≤ 5
-    - MolLogP ≤ 5.5
-    - NumRotatableBonds ≤ 10
+## 📁 1. Database Download
 
-3. BIOMART
-    - Download (https://www.ensembl.org/biomart/martview/8403dac70986fcef75d758c4bc648d6f)
-    - Ensembl Genes 115, Human genes (GRCh38.p14)
-    - Gene stable ID, Protein stable ID, APPRIS annotation, Ensembl Canonical, Gene name
-    - ENSG to ENSP code
+### 🔹 1.1 Human PPI (STRING)
+- **Source:** [STRING v12.0](https://string-db.org/cgi/download?sessionId=bxgqh7YBMvBD&species_text=Homo+sapiens&settings_expanded=0&min_download_score=0&filter_redundant_pairs=0&delimiter_type=txt)
+- **File:** `9606.protein.links.v12.0.txt.gz`
+- **Processed with:** `build_ppi_db()`
+- **Uploaded Table:** `Human_PPI`
+  - Total edges: **473,860**
+  - Node format: `9606.ENSPXXXX` → prefix `9606.` removed during DB upload
 
+---
 
-4. Network Proximity Calculation
-    - DistMatrix (Human_PPI의 모든 노드들에 대한 거리 계산)
+### 🔹 1.2 HERB 2.0 (HIT) Data
+- **Source:** [HERB 2.0 Download Portal](http://47.92.70.12/Download/)
+- **Categories:**
+  | Type | Range | Example ID | Note |
+  |------|--------|-------------|------|
+  | Herb | `HERB000001` ~ `HERB007263` | — |  |
+  | Ingredient | `HBIN000001` ~ `HBIN049258` | — | ADME filtering applied |
+  | Formula | `HBFO000001` ~ `HBFO006743` | — |  |
+  | Target | `HBTAR000001` ~ `HBTAR015515` | ENSG format |  |
+  | Disease | `HBDIS000001` ~ `HBDIS030170` | — |  |
+  | Meta-analysis | `HBMA000001` | — |  |
+  | Clinical trial | `HBCT000001` | — |  |
+  | Reference | `HBREF000001` | — |  |
+  | Experiment | `HBEXP000002` | — |  |
+
+---
+
+## 🧩 2. Database Construction
+
+**Tables**
+- `Human_PPI`
+- `Herb_2_0_edge`
+- `Herb_2_0_node`
+
+**Filtering**
+- Retained edges:  
+  `Formula–Herb–Ingredient–Target (F–H–I–T)` and `Disease–Target (D–T)`
+- Only **ADME-passing ingredients** are kept.
+
+### ⚗️ ADME Screening Criteria (Balanced Profile)
+
+| Property | Threshold | Rule |
+|-----------|------------|------|
+| OB_score | ≥ 30 | None = neutral |
+| Drug_likeness | ≥ 0.18 |  |
+| MolWt | ≤ 500 |  |
+| NumHAcceptors | ≤ 10 |  |
+| NumHDonors | ≤ 5 |  |
+| MolLogP | ≤ 5.5 |  |
+| NumRotatableBonds | ≤ 10 |  |
+
+---
+
+## 🧬 3. BioMart (ENSG → ENSP Mapping)
+
+- **Portal:** [Ensembl BioMart](https://www.ensembl.org/biomart/martview/8403dac70986fcef75d758c4bc648d6f)
+- **Dataset:** *Ensembl Genes 115, Human (GRCh38.p14)*
+- **Columns Used:**
+  - Gene stable ID (ENSG)
+  - Protein stable ID (ENSP)
+  - APPRIS annotation
+  - Ensembl Canonical
+  - Gene name
+- **Output:** `ENSG → ENSP` mapping table  
+  Used to link HERB Target (ENSG) to STRING PPI (ENSP).
+
+---
+
+## 🔗 4. Network Proximity Calculation
+
+- **Graph:** Human_PPI (STRING v12.0) — ENSP–ENSP edges  
+- **Distance options:**
+  - Precomputed full matrix (`DistMatrix`)  
+  - Incremental memmap row caching (`rows_mm.npy`)
+
+### 🧠 Output Format
+
+```python
+{
+  "shortest": <observed mean distance>,
+  "Z_score": {
+      "d": <observed>,
+      "z": <Z-score>,
+      "mean": <random mean>,
+      "std": <random std>,
+      "p": <empirical p-value>
+  }
+}
