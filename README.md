@@ -59,6 +59,35 @@ Implements efficient **Network Proximity** (A–B set distance & Z-score) calcul
 | NumRotatableBonds | ≤ 10 |  |
 
 ---
+## 📊 Database Information (DB.db)`
+
+SQLite `DB.db`의 주요 테이블을 워크북 시트로 내보낸 파일입니다.  
+각 시트의 출처·의미·주요 식별자를 아래에 정리했습니다. *(괄호 안은 현재 행 수 예시)*
+
+| Sheet | Source | What it contains | Key IDs / Notes |
+|---|---|---|---|
+| **BIOMART_mapping_raw** (533,785) | Ensembl **BioMart** | BioMart에서 그대로 받은 원시 매핑 | `Gene stable ID(ENSG)`, `Protein stable ID(ENSP)`, `Ensembl Canonical`, `APPRIS`, `Gene name` |
+| **Ensembl_xref** (23,869) | Derived (from BioMart) | **대표 1:1 매핑** (ENSG→ENSP, Canonical/APPRIS 우선 규칙 적용) | `ensg`, `ensp`, `hgnc_symbol`, `uniprot`, `picked_by` |
+| **Ensembl_xref_all** (245,535) | Derived (from BioMart) | **전체 1:N 매핑** (모든 ENSG–ENSP 쌍) | `ensg`, `ensp`, `hgnc_symbol`, `uniprot` |
+| **Human_PPI** (473,860) | **STRING v12.0** | 인간 단백질–단백질 상호작용 엣지 | `protein1`, `protein2` (형태는 `ENSP`; 업로드 시 `9606.` 접두사 제거) |
+| **Disease_info** (30,170) | **HERB 2.0 (HIT)** | 질병 메타데이터 | `Disease_id (HBDIS...)`, `Disease_name`, `DisGeNET_id`, 분류 체계/식별자 |
+| **Formula_info** (6,743) | HERB 2.0 | 처방(방제) 메타데이터 | `Formula_id (HBFO...)`, 한/영/병음명, 범주/출전 |
+| **Herb_info** (6,892) | HERB 2.0 | 본초(약재) 메타데이터 | `Herb_id (HERB...)`, 한/영/병음/이명 |
+| **Ingredient_info** (44,595) | HERB 2.0 | 성분(화합물) 메타데이터 + **ADME 필드** | `Ingredient_id (HBIN...)`, `Canonical_smiles`, `Molecular_formula`, `OB_score`, `Drug_likeness`, `MolWt`, `NumHAcceptors/Donors`, `MolLogP`, `NumRotatableBonds` |
+| **Target_info** (15,515) | HERB 2.0 | 타깃 메타데이터 | `Target_id (HBTAR...)`, `Ensembl_id (ENSG)` |
+| **HERB_edges** (859,757) | **Scraped from HERB 2.0** | HERB 2.0에서 수집한 **원시 네트워크 엣지** | `Node_1`, `Node_2` (노드에는 `HERB/HBIN/HBTAR/HBDIS/HBFO` 등 코드가 혼재) |
+
+> 🧭 **파이프라인 요약**  
+> - **BioMart**로 ENSG→ENSP 매핑을 만들고(`Ensembl_xref`, `Ensembl_xref_all`),  
+> - **HERB_edges**의 Target(주로 ENSG)을 **ENSP**로 연결해 **STRING Human_PPI** 네트워크에서 **Network Proximity**를 계산합니다.  
+> - PPI 노드 표기는 `ENSP`; STRING 원본의 `9606.ENSPxxxxx`는 업로드 시 `9606.` 접두사를 제거했습니다.
+
+### Export 재현
+아래 스니펫으로 DB를 엑셀로 다시 덤프할 수 있습니다.
+```python
+# notebook_empty.py 내 함수 사용
+export_db_to_excel("./Data/DB.db", "./HERB_KG_dump.xlsx", include_views=False)
+
 
 ## 🧬 3. BioMart (ENSG → ENSP Mapping)
 
