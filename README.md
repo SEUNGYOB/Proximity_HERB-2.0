@@ -104,12 +104,65 @@ export_db_to_excel("./Data/DB.db", "./HERB_KG_dump.xlsx", include_views=False)
 
 ---
 
-## 🔗 4. Network Proximity Calculation
+## 🔗 4. Network Proximity Calculation (Example)
 
-- **Graph:** Human_PPI (STRING v12.0) — ENSP–ENSP edges  
-- **Distance options:**
-  - Precomputed full matrix (`DistMatrix`)  
-  - Incremental memmap row caching (`rows_mm.npy`)
+아래 예시는 DB에서 STRING PPI를 불러와 그래프를 만들고,
+HERB/DISEASE에 해당하는 **ENSP 노드 집합**을 구한 뒤
+`compute_network_distances_CPU()`로 **근접도(Z-score)** 를 계산합니다.
+
+> 캐싱 전략  
+> - 빠르게 시작하려면 `dist=None` → **증분(memmap) 캐시**(`./Data/Human_PPI/rows_mm.npy`) 자동 사용  
+> - 대규모 반복 실험이면 `build_dist_matrix_from_graph()`로 **풀 매트릭스**를 만들어 `dist=`에 넘기면 더 빠름
+
+```python
+# example: examples/proximity_demo.py
+import sqlite3
+import pandas as pd
+import networkx as nx
+import numpy as np
+
+import Utils
+import proximity_util as pu
+from Execution_Proximity import load_edges_from_db, create_network_from_edges
+# (필요시) from Execution_Proximity import build_dist_matrix_from_graph
+
+DB_PATH = "./Data/DB.db"
+
+# 1) Human PPI 로드 → Graph
+edges = load_edges_from_db(DB_PATH, table_name="Human_PPI",
+                           source_col="protein1", target_col="protein2")
+G = create_network_from_edges(edges)
+
+# 2) 쿼리 → ENSP 노드 집합
+herb_ensp = Utils.get_ensp_ids("HERB002168")
+ing_ensp  = Utils.get_ensp_ids("HBIN046526")
+dis_ensp  = Utils.get_ensp_ids("HBDIS001345")
+
+print(len(herb_ensp), len(ing_ensp), len(dis_ensp))  # sanity check
+
+# 3A) 증분 캐싱 경로 (권장: 처음 사용할 때)
+res = pu.compute_network_distances_CPU(
+    G=G,
+    dist=None,              # memmap 캐시(./Data/Human_PPI/rows_mm.npy)에 행을 점진적으로 쌓음
+    A=herb_ensp,
+    B=dis_ensp,
+    random_time=100,        # degree-matched resampling 횟수
+    seed=42,                # 재현성(다양성 원하면 None)
+    max_workers=16
+)
+print(res)
+# 출력 예:
+# {
+#   'shortest': 1.7488,
+#   'Z_score': {'d': 1.7488, 'z': -7.79, 'mean': 2.0093, 'std': 0.0334, 'p': 0.0}
+# }
+
+# 3B) (선택) 풀 매트릭스 경로: 반복 실험/배치에 유리
+# dist_full = build_dist_matrix_from_graph(G)
+# res = pu.compute_network_distances_CPU(G=G, dist=dist_full, A=herb_ensp, B=dis_ensp, random_time=100, seed=42)
+# print(res)
+
+
 
 ### 🧠 Output Format
 
