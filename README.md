@@ -70,7 +70,7 @@ SQLite `DB.db`의 주요 테이블을 워크북 시트로 내보낸 파일입니
 | **Ensembl_xref** (23,869) | Derived (from BioMart) | **대표 1:1 매핑** (ENSG→ENSP, Canonical/APPRIS 우선 규칙 적용) | `ensg`, `ensp`, `hgnc_symbol`, `uniprot`, `picked_by` |
 | **Ensembl_xref_all** (245,535) | Derived (from BioMart) | **전체 1:N 매핑** (모든 ENSG–ENSP 쌍) | `ensg`, `ensp`, `hgnc_symbol`, `uniprot` |
 | **Human_PPI** (473,860) | **STRING v12.0** | 인간 단백질–단백질 상호작용 엣지 | `protein1`, `protein2` (형태는 `ENSP`; 업로드 시 `9606.` 접두사 제거) |
-| **Disease_info** (30,170) | **HERB 2.0** | 질병 메타데이터 | `Disease_id (HBDIS...)`, `Disease_name`, `DisGeNET_id`, 분류 체계/식별자 |
+| **Disease_info** (30,170) | HERB 2.0 | 질병 메타데이터 | `Disease_id (HBDIS...)`, `Disease_name`, `DisGeNET_id`, 분류 체계/식별자 |
 | **Formula_info** (6,743) | HERB 2.0 | 처방(방제) 메타데이터 | `Formula_id (HBFO...)`, 한/영/병음명, 범주/출전 |
 | **Herb_info** (6,892) | HERB 2.0 | 본초(약재) 메타데이터 | `Herb_id (HERB...)`, 한/영/병음/이명 |
 | **Ingredient_info** (44,595) | HERB 2.0 | 성분(화합물) 메타데이터 + **ADME 필드** | `Ingredient_id (HBIN...)`, `Canonical_smiles`, `Molecular_formula`, `OB_score`, `Drug_likeness`, `MolWt`, `NumHAcceptors/Donors`, `MolLogP`, `NumRotatableBonds` |
