@@ -63,7 +63,8 @@ Implements efficient **Network Proximity** (A–B set distance & Z-score) calcul
 
 SQLite `DB.db`의 주요 테이블을 워크북 시트로 내보낸 파일입니다.  
 각 시트의 출처·의미·주요 식별자를 아래에 정리했습니다. *(괄호 안은 현재 행 수 예시)*
-다운로드 링크(https://drive.google.com/file/d/1MceeVsg9utgvFRjC73QPgJWPh9o9J_US/view?usp=drive_link)
+
+[📥 Download Data (Google Drive)](https://drive.google.com/file/d/1MceeVsg9utgvFRjC73QPgJWPh9o9J_US/view?usp=drive_link)
 
 | Table | Source | What it contains | Key IDs / Notes |
 |---|---|---|---|
