@@ -1,5 +1,4 @@
-#1 ㅁㄴㅇ
-#🧬 Proximity-Final
+# 🧬 Proximity-Final
 
 Network-based **Herbal Medicine – Target – Disease** relationship analysis using **STRING Human PPI** and **HERB 2.0 (HIT)** database.  
 Implements efficient **Network Proximity** (A–B set distance & Z-score) calculation with **incremental memmap caching**.
