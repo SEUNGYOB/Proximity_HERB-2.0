@@ -64,7 +64,7 @@ Implements efficient **Network Proximity** (A–B set distance & Z-score) calcul
 SQLite `DB.db`의 주요 테이블을 워크북 시트로 내보낸 파일입니다.  
 각 시트의 출처·의미·주요 식별자를 아래에 정리했습니다. *(괄호 안은 현재 행 수 예시)*
 
-| Sheet | Source | What it contains | Key IDs / Notes |
+| Table | Source | What it contains | Key IDs / Notes |
 |---|---|---|---|
 | **BIOMART_mapping_raw** (533,785) | Ensembl **BioMart** | BioMart에서 그대로 받은 원시 매핑 | `Gene stable ID(ENSG)`, `Protein stable ID(ENSP)`, `Ensembl Canonical`, `APPRIS`, `Gene name` |
 | **Ensembl_xref** (23,869) | Derived (from BioMart) | **대표 1:1 매핑** (ENSG→ENSP, Canonical/APPRIS 우선 규칙 적용) | `ensg`, `ensp`, `hgnc_symbol`, `uniprot`, `picked_by` |
