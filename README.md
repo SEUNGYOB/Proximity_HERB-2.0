@@ -82,12 +82,6 @@ SQLite `DB.db`의 주요 테이블을 워크북 시트로 내보낸 파일입니
 > - **HERB_edges**의 Target(주로 ENSG)을 **ENSP**로 연결해 **STRING Human_PPI** 네트워크에서 **Network Proximity**를 계산합니다.  
 > - PPI 노드 표기는 `ENSP`; STRING 원본의 `9606.ENSPxxxxx`는 업로드 시 `9606.` 접두사를 제거했습니다.
 
-### Export 재현
-아래 스니펫으로 DB를 엑셀로 다시 덤프할 수 있습니다.
-```python
-# notebook_empty.py 내 함수 사용
-export_db_to_excel("./Data/DB.db", "./HERB_KG_dump.xlsx", include_views=False)
-
 
 ## 🧬 3. BioMart (ENSG → ENSP Mapping)
 
