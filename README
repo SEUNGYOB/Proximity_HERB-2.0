@@ -1,0 +1,42 @@
+1. DB_Download
+
+    1) Human_PPI ()
+        STRING (https://string-db.org/cgi/download?sessionId=bxgqh7YBMvBD&species_text=Homo+sapiens&settings_expanded=0&min_download_score=0&filter_redundant_pairs=0&delimiter_type=txt)에서 "9606.protein.links.v12.0.txt.gz" 다운로드
+        build_ppi_db()로 Human_PPI network edge(473860개) 업로드
+
+    2) Herb, Ingredient, Target, Formula, Disease Information crawling
+        HERB 2.0 (HIT) - http://47.92.70.12/Download/
+        - Herb (~ HERB007263)
+        - Ingredient (~ HBIN049258)
+        - Formula (~ HBFO006743)
+        - Target (~ HBTAR015515, ENSG 표기)
+        - Disease (~ HBDIS030170)
+        - Meta-analysis (HBMA000001)
+        - Clinical trial (HBCT000001)
+        - Reference (HBREF000001)
+        - Experiment (HBEXP000002)
+
+2. DB_Construction
+    - Human_PPI
+    - Herb 2.0_edge
+    - Herb 2.0_node
+    - Filtering (F-H-I-T, D-T edge만 살림, ADME 기준 통과한 성분만 살림)
+   ADME Screening Criteria (Balanced Profile)
+    ------------------------------------------
+    - OB_score ≥ 30  (None values are treated as neutral, not fail)
+    - Drug_likeness ≥ 0.18
+    - MolWt ≤ 500
+    - NumHAcceptors ≤ 10
+    - NumHDonors ≤ 5
+    - MolLogP ≤ 5.5
+    - NumRotatableBonds ≤ 10
+
+3. BIOMART
+    - Download (https://www.ensembl.org/biomart/martview/8403dac70986fcef75d758c4bc648d6f)
+    - Ensembl Genes 115, Human genes (GRCh38.p14)
+    - Gene stable ID, Protein stable ID, APPRIS annotation, Ensembl Canonical, Gene name
+    - ENSG to ENSP code
+
+
+4. Network Proximity Calculation
+    - DistMatrix (Human_PPI의 모든 노드들에 대한 거리 계산)
