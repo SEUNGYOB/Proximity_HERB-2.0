@@ -1,0 +1,441 @@
+"""
+
+"""
+import pandas as pd
+from pathlib import Path
+import sqlite3
+
+
+#1. Human_PPI_Construction
+def build_ppi_db(filepath: str | Path | None = None, cutoff: int = 700) -> pd.DataFrame:
+    """
+    STRING PPI 파일을 읽고 combined_score >= cutoff 인 데이터만 반환.
+
+    Parameters
+    ----------
+    filepath : str | Path | None
+        STRING PPI edgelist 경로 (예: "9606.protein.links.v12.0.txt"). None일 경우 기본 경로 사용.
+    cutoff : int, optional
+        최소 combined_score 기준 (default=700)
+
+    Returns
+    -------
+    pd.DataFrame
+        필터링된 데이터프레임 (columns: protein1, protein2, combined_score)
+    """
+    if filepath is None:
+        filepath = "./Data/Human_PPI/9606.protein.links.v12.0.txt"
+
+    filepath = Path(filepath)
+    df = pd.read_csv(filepath, sep=" ")
+    df = df[df["combined_score"] >= cutoff].reset_index(drop=True)
+    print(len(df))
+
+    # Save to SQLite database
+    db_path = Path("./Data/DB.db")
+    conn = sqlite3.connect(db_path)
+    df.to_sql("Human_PPI", conn, if_exists="replace", index=False)
+    conn.close()
+
+    return
+# build_ppi_db()
+
+#2-1. Herb 2.0 Construction - node
+herb_info_path = "./Data/HERB 2.0/api/HERB 2.0_total_edges.csv"
+db_path = "./Data/DB.db"
+
+#2-2. Herb 2.0 Construction - node
+
+# Mapping from file-kind to target table name
+TABLE_NAME_MAP = {
+    "herb": "Herb_info",
+    "formula": "Formula_info",
+    "target": "Target_info",
+    "disease": "Disease_info",
+    "ingredient": "Ingredient_info",
+}
+
+def _infer_kind_from_filename(p: Path) -> str | None:
+    """
+    Infer which entity a CSV belongs to based on filename.
+    We match whole tokens between separators to avoid the 'HERB_' prefix being read as 'herb'.
+    Priority order: disease > formula > ingredient > target > herb
+    """
+    name = p.stem.lower()
+    # split on common separators
+    import re
+    tokens = re.split(r"[^\w]+", name)  # keep alnum/underscore as token chars
+    tokens = [t for t in tokens if t]   # drop empties
+
+    # priority list ensures we don't misclassify 'HERB_disease_info' as 'herb'
+    priority = ["disease", "formula", "ingredient", "target", "herb"]
+    for kind in priority:
+        if kind in tokens:
+            return kind
+
+    # secondary: regex for *_{kind}_* pattern
+    for kind in priority:
+        if re.search(rf"(?:^|[_\-]){kind}(?:[_\-]|$)", name):
+            return kind
+
+    return None
+
+def _infer_pk_column(df: pd.DataFrame) -> str | None:
+    """
+    Heuristically infer a primary key-like column (for indexing) from DataFrame columns.
+    Preference: columns ending with '_id', else 'id' variants.
+    """
+    for c in df.columns:
+        if str(c).lower().endswith("_id"):
+            return c
+    for c in ("id", "ID", "Id"):
+        if c in df.columns:
+            return c
+    return None
+
+def _load_csv_clean(path: Path) -> pd.DataFrame:
+    """
+    Load delimited text robustly:
+      - tries automatic delimiter detection (engine='python', sep=None)
+      - falls back to common delimiters: ',', '\\t', '|', ';', whitespace
+      - uses UTF-8 with BOM handling
+      - skips malformed lines as last resort
+    Then:
+      - cast to pandas 'string' dtype where applicable
+      - strip whitespace on string columns
+      - drop exact duplicate rows
+    """
+    # Ordered attempts: (kwargs, description)
+    attempts = [
+        (dict(sep=None, engine="python"), "auto-detect"),
+        (dict(sep=","), "comma"),
+        (dict(sep="\t"), "tab"),
+        (dict(sep="|"), "pipe"),
+        (dict(sep=";"), "semicolon"),
+        (dict(sep=r"\s+", engine="python"), "whitespace"),
+    ]
+
+    last_err = None
+    for kwargs, label in attempts:
+        try:
+            df = pd.read_csv(path, dtype="string", encoding="utf-8-sig", **kwargs)
+            # basic sanity: at least 1 column and 1 row
+            if df.shape[1] == 0:
+                raise ValueError("Parsed 0 columns")
+            print(f"[READ] {path.name}: parsed with {label}")
+            break
+        except Exception as e:
+            last_err = e
+            continue
+    else:
+        # final fallback: skip bad lines
+        try:
+            df = pd.read_csv(
+                path,
+                dtype="string",
+                encoding="utf-8-sig",
+                sep=None,
+                engine="python",
+                on_bad_lines="skip",
+            )
+            print(f"[READ] {path.name}: parsed with auto-detect + skip bad lines")
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse {path} — last error: {last_err}") from e
+
+    # Normalize string columns
+    for col in df.columns:
+        if pd.api.types.is_string_dtype(df[col]):
+            df[col] = df[col].str.strip()
+    df = df.drop_duplicates().reset_index(drop=True)
+    return df
+
+def build_herb_info_tables(info_dir: str | Path = None,
+                           table_name_map: dict[str, str] = None,
+                           include_unknown: bool = False) -> dict[str, int]:
+    """
+    Scan `herb_info_dir` for CSVs and load them into SQLite as:
+      - Herb_info, Formula_info, Target_info, Disease_info, Ingredient_info
+    using filename-based inference (e.g., any CSV whose name contains 'herb' -> Herb_info).
+
+    Parameters
+    ----------
+    info_dir : str | Path | None
+        Directory containing entity CSV files. Defaults to global `herb_info_dir`.
+    table_name_map : dict[str,str] | None
+        Optional override of kind->table mapping.
+    include_unknown : bool
+        If True, CSVs with unknown kind will be loaded into tables using their stem as table name.
+
+    Returns
+    -------
+    dict[str,int] : {table_name: row_count_loaded}
+    """
+    herb_info_dir = "./Data/HERB 2.0"
+
+    if info_dir is None:
+        info_dir = herb_info_dir
+    info_dir = Path(info_dir)
+    if table_name_map is None:
+        table_name_map = TABLE_NAME_MAP
+
+    if not info_dir.exists():
+        raise FileNotFoundError(f"Info directory not found: {info_dir}")
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    # 1) 수집 단계: 파일 → 대상 테이블명으로 그룹핑
+    files_by_table: dict[str, list[Path]] = {}
+
+    csv_files = sorted(list(info_dir.glob("*.csv")) + list(info_dir.glob("*.txt")))
+    if not csv_files:
+        print(f"[WARN] No CSV/TXT files found in {info_dir}")
+
+    for csv_path in csv_files:
+        kind = _infer_kind_from_filename(csv_path)
+        if kind is None:
+            if not include_unknown:
+                print(f"[SKIP] Unknown kind for file: {csv_path.name}")
+                continue
+            table_name = csv_path.stem  # fallback: 파일 이름 그대로
+        else:
+            table_name = table_name_map.get(kind)
+            if not table_name:
+                print(f"[SKIP] No table mapping for kind='{kind}' ({csv_path.name})")
+                continue
+
+        files_by_table.setdefault(table_name, []).append(csv_path)
+
+    # 2) 적재 단계: 테이블 단위로 모두 합쳐서 1번만 write (replace)
+    results: dict[str, int] = {}
+    for table_name, paths in files_by_table.items():
+        dfs = []
+        for p in paths:
+            df_part = _load_csv_clean(p)
+            dfs.append(df_part)
+            print(f"[LOAD] {p.name} → {table_name}: {len(df_part):,} rows")
+        if not dfs:
+            continue
+        df = pd.concat(dfs, ignore_index=True)
+        # 전역 중복 제거 (완전 동일 행)
+        df = df.drop_duplicates().reset_index(drop=True)
+
+        # 쓰기 (테이블당 1회 replace)
+        df.to_sql(table_name, conn, if_exists="replace", index=False)
+        results[table_name] = len(df)
+        print(f"[DONE] Wrote {len(df):,} rows to {table_name} (from {len(paths)} files)")
+
+        # 3) 인덱스 생성: *_id 우선, 없으면 id
+        pk = _infer_pk_column(df)
+        if pk:
+            try:
+                cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{table_name}_{pk} ON "{table_name}"("{pk}")')
+            except Exception as e:
+                print(f"[WARN] Failed to create index on {table_name}({pk}): {e}")
+
+    conn.commit()
+    conn.close()
+    if not results:
+        print("[WARN] No tables were created. Check filenames and directory path.")
+    return results
+# build_herb_info_tables()
+
+
+#2-2. Herb 2.0 Construction - edge
+
+def build_herb_edges_db(filepath: str | Path | None = None, table_name: str = "HERB_edges") -> None:
+    """
+    HERB 2.0 edge CSV 파일을 읽어 SQLite DB에 저장.
+
+    Parameters
+    ----------
+    filepath : str | Path | None
+        HERB 2.0 edge CSV 경로 (예: "HERB 2.0_total_edges.csv").
+        None일 경우 기본 경로 사용.
+    table_name : str
+        저장할 SQLite 테이블 이름 (default="HERB_edges")
+
+    Returns
+    -------
+    None
+    """
+    if filepath is None:
+        filepath = herb_info_path
+    filepath = Path(filepath)
+    df = pd.read_csv(filepath, dtype="string")
+    print(f"[INFO] Loaded {len(df)} edges from {filepath}")
+
+    conn = sqlite3.connect(db_path)
+    df.to_sql(table_name, conn, if_exists="replace", index=False)
+    conn.close()
+    print(f"[DONE] Saved {len(df)} edges into table '{table_name}' in {db_path}")
+
+    return
+
+# build_herb_edges_db("./Data/HERB 2.0/api/HERB 2.0_total_edges.csv")  # 기본 경로 사용
+
+
+
+# 2-3. Cleaning HERB_edges
+"""F–T, D–H 등의 edge들은 삭제, ingredient 중에서 ADME 기준 탈락자들은 삭제
+<ADME 기준>
+•	OB_score ≥ 30
+•	Drug_likeness ≥ 0.18
+•	MolWt ≤ 500
+•	NumHAcceptors ≤ 10
+•	NumHDonors ≤ 5
+•	MolLogP ≤ 5
+•	NumRotatableBonds ≤ 10
+"""
+def build_edges_clean_adme(db_path_local: str | Path = None,
+                           out_table: str = "HERB_edges_clean",
+                           drop_original: bool = False) -> None:
+    """
+    Build a cleaned HERB_edges table with:
+      1) Ingredient ADME filters applied (only edges touching Ingredients that pass ADME survive),
+      2) Keep only rational pairs for KG/GNN: Formula–Herb, Herb–Ingredient, Ingredient–Target, Target–Disease.
+         (Drop convenience/derived pairs like Formula–Target, Herb–Target, Disease–Herb, Disease–Formula, etc.)
+
+    Notes
+    -----
+    - ADME filters (applied when an Ingredient participates):
+        OB_score >= 30
+        Drug_likeness >= 0.18
+        MolWt <= 500
+        NumHAcceptors <= 10
+        NumHDonors <= 5
+        MolLogP <= 5
+        NumRotatableBonds <= 10
+    - Edges are treated as undirected; we canonicalize (A<=B) and deduplicate.
+    - Target uses COALESCE(Target_id, Ensembl_id) for robust matching.
+    """
+    if db_path_local is None:
+        db_path_local = db_path
+    conn = sqlite3.connect(db_path_local)
+    cur = conn.cursor()
+    try:
+        # 0) Ensure a typed view exists to classify nodes (similar to analyze_herb_edges)
+        cur.execute("DROP VIEW IF EXISTS EdgeTyped")
+        cur.execute("""
+        CREATE VIEW EdgeTyped AS
+        WITH e AS (SELECT Node_1, Node_2 FROM HERB_edges)
+        SELECT
+          e.Node_1, e.Node_2,
+          h1.Herb_id       AS h1,  i1.Ingredient_id AS i1,
+          t1.Target_id     AS t1,  t1.Ensembl_id    AS g1,
+          d1.Disease_id    AS d1,  f1.Formula_id    AS f1,
+          h2.Herb_id       AS h2,  i2.Ingredient_id AS i2,
+          t2.Target_id     AS t2,  t2.Ensembl_id    AS g2,
+          d2.Disease_id    AS d2,  f2.Formula_id    AS f2
+        FROM e
+        LEFT JOIN Herb_info        h1 ON e.Node_1 = h1.Herb_id
+        LEFT JOIN Ingredient_info  i1 ON e.Node_1 = i1.Ingredient_id
+        LEFT JOIN Target_info      t1 ON e.Node_1 = t1.Target_id
+        LEFT JOIN Disease_info     d1 ON e.Node_1 = d1.Disease_id
+        LEFT JOIN Formula_info     f1 ON e.Node_1 = f1.Formula_id
+        LEFT JOIN Herb_info        h2 ON e.Node_2 = h2.Herb_id
+        LEFT JOIN Ingredient_info  i2 ON e.Node_2 = i2.Ingredient_id
+        LEFT JOIN Target_info      t2 ON e.Node_2 = t2.Target_id
+        LEFT JOIN Disease_info     d2 ON e.Node_2 = d2.Disease_id
+        LEFT JOIN Formula_info     f2 ON e.Node_2 = f2.Formula_id;
+        """)
+        conn.commit()
+
+        # 1) ADME-passing ingredients (numbers are TEXT in DB, so CAST)
+        cur.execute("DROP VIEW IF EXISTS I_FILTER")
+        cur.execute("""
+        CREATE VIEW I_FILTER AS
+        SELECT Ingredient_id
+        FROM Ingredient_info
+        WHERE
+          CAST(OB_score            AS REAL) >= 30
+          AND CAST(Drug_likeness   AS REAL) >= 0.18
+          AND CAST(MolWt           AS REAL) <= 500
+          AND CAST(NumHAcceptors   AS REAL) <= 10
+          AND CAST(NumHDonors      AS REAL) <= 5
+          AND CAST(MolLogP         AS REAL) <= 5
+          AND CAST(NumRotatableBonds AS REAL) <= 10
+        """)
+        conn.commit()
+
+        # 2) Build pair sets we want to KEEP (F–H, H–I (filtered), I–T (filtered), T–D)
+        cur.execute(f'DROP TABLE IF EXISTS "{out_table}_tmp"')
+        cur.execute(f"""
+        CREATE TABLE "{out_table}_tmp" AS
+        WITH
+        FH AS (  -- Formula–Herb (both directions)
+          SELECT DISTINCT f1 AS A, h2 AS B FROM EdgeTyped WHERE f1 IS NOT NULL AND h2 IS NOT NULL
+          UNION
+          SELECT DISTINCT f2 AS A, h1 AS B FROM EdgeTyped WHERE f2 IS NOT NULL AND h1 IS NOT NULL
+        ),
+        HI AS (  -- Herb–Ingredient, ingredient must pass ADME
+          SELECT DISTINCT h1 AS A, i2 AS B
+          FROM EdgeTyped
+          JOIN I_FILTER F ON F.Ingredient_id = i2
+          WHERE h1 IS NOT NULL AND i2 IS NOT NULL
+          UNION
+          SELECT DISTINCT h2 AS A, i1 AS B
+          FROM EdgeTyped
+          JOIN I_FILTER F ON F.Ingredient_id = i1
+          WHERE h2 IS NOT NULL AND i1 IS NOT NULL
+        ),
+        IT AS (  -- Ingredient–Target, ingredient must pass ADME
+          SELECT DISTINCT i1 AS A, COALESCE(t2, g2) AS B
+          FROM EdgeTyped
+          JOIN I_FILTER F ON F.Ingredient_id = i1
+          WHERE i1 IS NOT NULL AND (t2 IS NOT NULL OR g2 IS NOT NULL)
+          UNION
+          SELECT DISTINCT i2 AS A, COALESCE(t1, g1) AS B
+          FROM EdgeTyped
+          JOIN I_FILTER F ON F.Ingredient_id = i2
+          WHERE i2 IS NOT NULL AND (t1 IS NOT NULL OR g1 IS NOT NULL)
+        ),
+        TD AS (  -- Target–Disease (both directions)
+          SELECT DISTINCT COALESCE(t1, g1) AS A, d2 AS B FROM EdgeTyped WHERE (t1 IS NOT NULL OR g1 IS NOT NULL) AND d2 IS NOT NULL
+          UNION
+          SELECT DISTINCT COALESCE(t2, g2) AS A, d1 AS B FROM EdgeTyped WHERE (t2 IS NOT NULL OR g2 IS NOT NULL) AND d1 IS NOT NULL
+        ),
+        ALL_KEEP AS (
+          SELECT 'Formula–Herb' AS tp, A, B FROM FH
+          UNION ALL
+          SELECT 'Herb–Ingredient' AS tp, A, B FROM HI
+          UNION ALL
+          SELECT 'Ingredient–Target' AS tp, A, B FROM IT
+          UNION ALL
+          SELECT 'Target–Disease' AS tp, A, B FROM TD
+        )
+        SELECT tp,
+               CASE WHEN A <= B THEN A ELSE B END AS Node_1,
+               CASE WHEN A <= B THEN B ELSE A END AS Node_2
+        FROM ALL_KEEP
+        WHERE A IS NOT NULL AND B IS NOT NULL AND A <> B
+        """)
+        conn.commit()
+
+        # 3) Deduplicate and finalize
+        cur.execute(f'DROP TABLE IF EXISTS "{out_table}"')
+        cur.execute(f'''
+            CREATE TABLE "{out_table}" AS
+            SELECT tp, Node_1, Node_2
+            FROM "{out_table}_tmp"
+            GROUP BY tp, Node_1, Node_2
+        ''')
+        conn.commit()
+        cur.execute(f'DROP TABLE IF EXISTS "{out_table}_tmp"')
+
+        # 4) Indexes
+        cur.execute(f'CREATE INDEX IF NOT EXISTS ix_{out_table}_tp ON "{out_table}"(tp)')
+        cur.execute(f'CREATE INDEX IF NOT EXISTS ix_{out_table}_n1 ON "{out_table}"(Node_1)')
+        cur.execute(f'CREATE INDEX IF NOT EXISTS ix_{out_table}_n2 ON "{out_table}"(Node_2)')
+        cur.execute(f'CREATE UNIQUE INDEX IF NOT EXISTS ux_{out_table}_pair ON "{out_table}"(tp, Node_1, Node_2)')
+        conn.commit()
+
+        if drop_original:
+            cur.execute('DROP TABLE IF EXISTS HERB_edges')
+            conn.commit()
+            print("[INFO] Dropped original HERB_edges.")
+
+        print(f"[DONE] Built {out_table} with ADME-filtered pairs (F–H, H–I, I–T, T–D).")
+    finally:
+        conn.close()
+# build_edges_clean_adme(db_path)
