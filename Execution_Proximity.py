@@ -85,13 +85,6 @@ def build_dist_matrix_from_graph(G):
 
 
 
-
-
-
-
-
-
-
 Whole_G = create_network_from_edges (load_edges_from_db (db_path))
 
 Herb_node_lists = Utils.get_ensp_ids("HERB002168")
@@ -103,7 +96,7 @@ dist = pu.compute_network_distances_CPU(
     dist=None,                  # 점진 캐싱 경로
     A=Herb_node_lists,
     B=Disease_node_lists,
-    random_time=100,
+    random_time=1,
     max_workers=16
 )
 
