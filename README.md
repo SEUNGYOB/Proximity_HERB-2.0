@@ -90,7 +90,7 @@ SQLite `DB.db`의 주요 테이블을 워크북 시트로 내보낸 파일입니
 ---
 
 
-## ⚙️ 5. Command-Line Usage (`run_proximity.py`)
+## ⚙️ 4. Command-Line Usage (`run_proximity.py`)
 
 The `run_proximity.py` script provides a command-line interface (CLI) for computing **network proximity (Z-score)**  
 between two biological node sets (e.g., herb–disease, ingredient–target) using the HERB 2.0–STRING Human PPI network.
