@@ -1,44 +1,80 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+HERB 2.0 × STRING Human PPI Database Builder
+--------------------------------------------
+
+Builds a unified SQLite database (`DB.db`) integrating
+HERB 2.0 and STRING v12.0 Human PPI data for network-based
+analysis (e.g., Network Proximity, GNN).
+
+Main Steps
+-----------
+1. **Human_PPI Construction**
+   - Load STRING file (`9606.protein.links.v12.0.txt`)
+   - Filter by `combined_score ≥ 700`
+   - Save as table `Human_PPI`
+
+2. **HERB 2.0 Construction**
+   - Load CSVs under `./Data/HERB 2.0/`
+   - Infer table: Herb_info, Formula_info, Ingredient_info,
+     Target_info, Disease_info
+   - Load edge file (`HERB 2.0_total_edges.csv`) → `HERB_edges`
+
+3. **Edge Cleaning**
+   - Keep biologically meaningful pairs:
+     Formula–Herb, Herb–Ingredient, Ingredient–Target, Target–Disease
+   - Optionally apply ADME filters (default: off)
+   - Save as `HERB_edges_clean`
+
+Output
+-------
+SQLite file: `./Data/DB.db`
+  ├── Human_PPI
+  ├── Herb_info / Formula_info / Ingredient_info / Target_info / Disease_info
+  ├── HERB_edges
+  └── HERB_edges_clean
+
+Author: Seungyob Yi
+Last updated: 2025-10
 """
 
-"""
 import pandas as pd
 from pathlib import Path
 import sqlite3
 
 
 #1. Human_PPI_Construction
+
 def build_ppi_db(filepath: str | Path | None = None, cutoff: int = 700) -> pd.DataFrame:
     """
-    STRING PPI 파일을 읽고 combined_score >= cutoff 인 데이터만 반환.
-
-    Parameters
-    ----------
-    filepath : str | Path | None
-        STRING PPI edgelist 경로 (예: "9606.protein.links.v12.0.txt"). None일 경우 기본 경로 사용.
-    cutoff : int, optional
-        최소 combined_score 기준 (default=700)
-
+    ... (docstring 동일) ...
     Returns
     -------
     pd.DataFrame
-        필터링된 데이터프레임 (columns: protein1, protein2, combined_score)
+        필터링된 데이터프레임
     """
     if filepath is None:
         filepath = "./Data/Human_PPI/9606.protein.links.v12.0.txt"
-
     filepath = Path(filepath)
-    df = pd.read_csv(filepath, sep=" ")
+
+    # 공백 다중 구분자 안전
+    df = pd.read_csv(filepath, sep=r"\s+", engine="python")
     df = df[df["combined_score"] >= cutoff].reset_index(drop=True)
-    print(len(df))
 
-    # Save to SQLite database
+    # DB 보장
     db_path = Path("./Data/DB.db")
-    conn = sqlite3.connect(db_path)
-    df.to_sql("Human_PPI", conn, if_exists="replace", index=False)
-    conn.close()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as conn:
+        df[["protein1","protein2","combined_score"]].to_sql("Human_PPI", conn, if_exists="replace", index=False)
+        # 인덱스 추천
+        cur = conn.cursor()
+        cur.execute("CREATE INDEX IF NOT EXISTS ix_hppi_p1 ON Human_PPI(protein1)")
+        cur.execute("CREATE INDEX IF NOT EXISTS ix_hppi_p2 ON Human_PPI(protein2)")
+        conn.commit()
 
-    return
-# build_ppi_db()
+    print(f"[DONE] Human_PPI written ({len(df):,} edges, cutoff={cutoff})")
+    return df
 
 #2-1. Herb 2.0 Construction - node
 herb_info_path = "./Data/HERB 2.0/api/HERB 2.0_total_edges.csv"
@@ -277,44 +313,37 @@ def build_herb_edges_db(filepath: str | Path | None = None, table_name: str = "H
 
 
 # 2-3. Cleaning HERB_edges
-"""F–T, D–H 등의 edge들은 삭제, ingredient 중에서 ADME 기준 탈락자들은 삭제
-<ADME 기준>
-•	OB_score ≥ 30
-•	Drug_likeness ≥ 0.18
-•	MolWt ≤ 500
-•	NumHAcceptors ≤ 10
-•	NumHDonors ≤ 5
-•	MolLogP ≤ 5
-•	NumRotatableBonds ≤ 10
-"""
-def build_edges_clean_adme(db_path_local: str | Path = None,
-                           out_table: str = "HERB_edges_clean",
-                           drop_original: bool = False) -> None:
-    """
-    Build a cleaned HERB_edges table with:
-      1) Ingredient ADME filters applied (only edges touching Ingredients that pass ADME survive),
-      2) Keep only rational pairs for KG/GNN: Formula–Herb, Herb–Ingredient, Ingredient–Target, Target–Disease.
-         (Drop convenience/derived pairs like Formula–Target, Herb–Target, Disease–Herb, Disease–Formula, etc.)
 
-    Notes
-    -----
-    - ADME filters (applied when an Ingredient participates):
-        OB_score >= 30
-        Drug_likeness >= 0.18
-        MolWt <= 500
-        NumHAcceptors <= 10
-        NumHDonors <= 5
-        MolLogP <= 5
-        NumRotatableBonds <= 10
-    - Edges are treated as undirected; we canonicalize (A<=B) and deduplicate.
-    - Target uses COALESCE(Target_id, Ensembl_id) for robust matching.
+
+from pathlib import Path
+import sqlite3
+
+def build_edges_clean_adme(db_path_local: str | Path,
+                           out_table: str = "HERB_edges_clean",
+                           drop_original: bool = False,
+                           *,
+                           use_adme: bool = False,
+                           adme_OB: float = 30.0,
+                           adme_DL: float = 0.18,
+                           adme_MW: float = 500.0,
+                           adme_HA: int = 10,
+                           adme_HD: int = 5,
+                           adme_LogP: float = 5.5,
+                           adme_RB: int = 10) -> None:
+    """
+    HERB_edges를 정리해 {out_table} 생성:
+      - (옵션) Ingredient에 ADME 필터 적용
+      - Formula–Herb / Herb–Ingredient / Ingredient–Target / Target–Disease만 유지
+      - 무방향 정규화 + 중복 제거
     """
     if db_path_local is None:
-        db_path_local = db_path
+        raise ValueError("db_path_local을 반드시 지정하세요.")
+    db_path_local = str(db_path_local)
+
     conn = sqlite3.connect(db_path_local)
     cur = conn.cursor()
     try:
-        # 0) Ensure a typed view exists to classify nodes (similar to analyze_herb_edges)
+        # 0) 타입 라벨링 뷰
         cur.execute("DROP VIEW IF EXISTS EdgeTyped")
         cur.execute("""
         CREATE VIEW EdgeTyped AS
@@ -341,59 +370,65 @@ def build_edges_clean_adme(db_path_local: str | Path = None,
         """)
         conn.commit()
 
-        # 1) ADME-passing ingredients (numbers are TEXT in DB, so CAST)
-        cur.execute("DROP VIEW IF EXISTS I_FILTER")
-        cur.execute("""
-        CREATE VIEW I_FILTER AS
-        SELECT Ingredient_id
-        FROM Ingredient_info
-        WHERE
-          CAST(OB_score            AS REAL) >= 30
-          AND CAST(Drug_likeness   AS REAL) >= 0.18
-          AND CAST(MolWt           AS REAL) <= 500
-          AND CAST(NumHAcceptors   AS REAL) <= 10
-          AND CAST(NumHDonors      AS REAL) <= 5
-          AND CAST(MolLogP         AS REAL) <= 5
-          AND CAST(NumRotatableBonds AS REAL) <= 10
-        """)
-        conn.commit()
+        # 1) (옵션) ADME 필터 뷰
+        if use_adme:
+            cur.execute("DROP VIEW IF EXISTS I_FILTER")
+            cur.execute(f"""
+            CREATE VIEW I_FILTER AS
+            SELECT Ingredient_id
+            FROM Ingredient_info
+            WHERE
+              CAST(NULLIF(OB_score,'')              AS REAL) >= {adme_OB}
+              AND CAST(NULLIF(Drug_likeness,'')     AS REAL) >= {adme_DL}
+              AND CAST(NULLIF(MolWt,'')             AS REAL) <= {adme_MW}
+              AND CAST(NULLIF(NumHAcceptors,'')     AS REAL) <= {adme_HA}
+              AND CAST(NULLIF(NumHDonors,'')        AS REAL) <= {adme_HD}
+              AND CAST(NULLIF(MolLogP,'')           AS REAL) <= {adme_LogP}
+              AND CAST(NULLIF(NumRotatableBonds,'') AS REAL) <= {adme_RB}
+            """)
+            conn.commit()
 
-        # 2) Build pair sets we want to KEEP (F–H, H–I (filtered), I–T (filtered), T–D)
+        # 2) KEEP 세트 (무방향 정규화 포함)
         cur.execute(f'DROP TABLE IF EXISTS "{out_table}_tmp"')
+        hi_join      = "JOIN I_FILTER F ON F.Ingredient_id = i2" if use_adme else ""
+        hi_join_rev  = "JOIN I_FILTER F ON F.Ingredient_id = i1" if use_adme else ""
+        it_join_left = "JOIN I_FILTER F ON F.Ingredient_id = i1" if use_adme else ""
+        it_join_right= "JOIN I_FILTER F ON F.Ingredient_id = i2" if use_adme else ""
+
         cur.execute(f"""
         CREATE TABLE "{out_table}_tmp" AS
         WITH
-        FH AS (  -- Formula–Herb (both directions)
+        FH AS (
           SELECT DISTINCT f1 AS A, h2 AS B FROM EdgeTyped WHERE f1 IS NOT NULL AND h2 IS NOT NULL
           UNION
           SELECT DISTINCT f2 AS A, h1 AS B FROM EdgeTyped WHERE f2 IS NOT NULL AND h1 IS NOT NULL
         ),
-        HI AS (  -- Herb–Ingredient, ingredient must pass ADME
+        HI AS (
           SELECT DISTINCT h1 AS A, i2 AS B
-          FROM EdgeTyped
-          JOIN I_FILTER F ON F.Ingredient_id = i2
+          FROM EdgeTyped {hi_join}
           WHERE h1 IS NOT NULL AND i2 IS NOT NULL
           UNION
           SELECT DISTINCT h2 AS A, i1 AS B
-          FROM EdgeTyped
-          JOIN I_FILTER F ON F.Ingredient_id = i1
+          FROM EdgeTyped {hi_join_rev}
           WHERE h2 IS NOT NULL AND i1 IS NOT NULL
         ),
-        IT AS (  -- Ingredient–Target, ingredient must pass ADME
+        IT AS (
           SELECT DISTINCT i1 AS A, COALESCE(t2, g2) AS B
-          FROM EdgeTyped
-          JOIN I_FILTER F ON F.Ingredient_id = i1
+          FROM EdgeTyped {it_join_left}
           WHERE i1 IS NOT NULL AND (t2 IS NOT NULL OR g2 IS NOT NULL)
           UNION
           SELECT DISTINCT i2 AS A, COALESCE(t1, g1) AS B
-          FROM EdgeTyped
-          JOIN I_FILTER F ON F.Ingredient_id = i2
+          FROM EdgeTyped {it_join_right}
           WHERE i2 IS NOT NULL AND (t1 IS NOT NULL OR g1 IS NOT NULL)
         ),
-        TD AS (  -- Target–Disease (both directions)
-          SELECT DISTINCT COALESCE(t1, g1) AS A, d2 AS B FROM EdgeTyped WHERE (t1 IS NOT NULL OR g1 IS NOT NULL) AND d2 IS NOT NULL
+        TD AS (
+          SELECT DISTINCT COALESCE(t1, g1) AS A, d2 AS B
+          FROM EdgeTyped
+          WHERE (t1 IS NOT NULL OR g1 IS NOT NULL) AND d2 IS NOT NULL
           UNION
-          SELECT DISTINCT COALESCE(t2, g2) AS A, d1 AS B FROM EdgeTyped WHERE (t2 IS NOT NULL OR g2 IS NOT NULL) AND d1 IS NOT NULL
+          SELECT DISTINCT COALESCE(t2, g2) AS A, d1 AS B
+          FROM EdgeTyped
+          WHERE (t2 IS NOT NULL OR g2 IS NOT NULL) AND d1 IS NOT NULL
         ),
         ALL_KEEP AS (
           SELECT 'Formula–Herb' AS tp, A, B FROM FH
@@ -412,7 +447,7 @@ def build_edges_clean_adme(db_path_local: str | Path = None,
         """)
         conn.commit()
 
-        # 3) Deduplicate and finalize
+        # 3) 중복 제거 + 인덱스
         cur.execute(f'DROP TABLE IF EXISTS "{out_table}"')
         cur.execute(f'''
             CREATE TABLE "{out_table}" AS
@@ -420,22 +455,18 @@ def build_edges_clean_adme(db_path_local: str | Path = None,
             FROM "{out_table}_tmp"
             GROUP BY tp, Node_1, Node_2
         ''')
-        conn.commit()
         cur.execute(f'DROP TABLE IF EXISTS "{out_table}_tmp"')
 
-        # 4) Indexes
-        cur.execute(f'CREATE INDEX IF NOT EXISTS ix_{out_table}_tp ON "{out_table}"(tp)')
-        cur.execute(f'CREATE INDEX IF NOT EXISTS ix_{out_table}_n1 ON "{out_table}"(Node_1)')
-        cur.execute(f'CREATE INDEX IF NOT EXISTS ix_{out_table}_n2 ON "{out_table}"(Node_2)')
+        cur.execute(f'CREATE INDEX IF NOT EXISTS ix_{out_table}_tp  ON "{out_table}"(tp)')
+        cur.execute(f'CREATE INDEX IF NOT EXISTS ix_{out_table}_n1  ON "{out_table}"(Node_1)')
+        cur.execute(f'CREATE INDEX IF NOT EXISTS ix_{out_table}_n2  ON "{out_table}"(Node_2)')
         cur.execute(f'CREATE UNIQUE INDEX IF NOT EXISTS ux_{out_table}_pair ON "{out_table}"(tp, Node_1, Node_2)')
         conn.commit()
 
         if drop_original:
             cur.execute('DROP TABLE IF EXISTS HERB_edges')
             conn.commit()
-            print("[INFO] Dropped original HERB_edges.")
 
-        print(f"[DONE] Built {out_table} with ADME-filtered pairs (F–H, H–I, I–T, T–D).")
+        print(f"[DONE] Built {out_table} ({'with' if use_adme else 'without'} ADME filters)")
     finally:
         conn.close()
-# build_edges_clean_adme(db_path)
