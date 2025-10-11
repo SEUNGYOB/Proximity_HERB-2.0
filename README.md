@@ -171,3 +171,70 @@ python run_proximity.py --a-id HERB002168 --b-id HBDIS001345 --out ./Results/HER
 - The script is designed for easy integration into batch or automated workflows (e.g., shell or Snakemake)  
 
 
+# 🧩 Evaluation.py — Functional Proximity & Enrichment Analysis
+
+`Evaluation.py`는 Herb–Disease 간 기능적 연관성(Functional Proximity)을 평가하기 위한 모듈입니다.  
+STRING 데이터베이스를 기반으로 enrichment 분석과 Shared Enrichment Score (SES) 계산을 수행하며,  
+선택적으로 randomization test (empirical p-value) 및 per-category 분석(GO/KEGG/Reactome/WikiPathways)을 지원합니다.
+
+---
+
+## 🚀 주요 기능
+- STRING Enrichment 연동: 각 ENSP 리스트의 GO/Pathway enrichment 결과 자동 수집  
+- Shared Enrichment Score (SES): 두 세트 간 상위 term 중복도 기반 유사도 계산  
+- Randomization Test: 경험적 p-value 산출 (degree-matched 옵션 지원)  
+- Per-category 분석: GO/KEGG/Reactome/WikiPathways 등 카테고리별 SES 계산  
+
+---
+
+## ⚙️ 기본 실행 (CLI)
+
+python Evaluation.py \
+  --herb-id HERB002168 \
+  --disease-id HBDIS001345 \
+  --categories functional \
+  --per-category \
+  --randomize 10 \
+  --seed 42
+
+---
+
+## 🧠 주요 옵션 요약
+
+옵션 | 설명 | 기본값
+------|------|--------
+--herb-id | HERB 데이터베이스의 Herb ID | HERB002168
+--disease-id | HERB Disease ID | HBDIS001345
+--categories | 분석 범주 (go, pathways, functional, all) | functional
+--per-category | 카테고리별 SES 리포트 출력 (플래그) | False
+--randomize | Randomization 반복 횟수 (0=비활성) | 0
+--bg | 백그라운드 소스 (xref 또는 ppi) | ppi
+--degree-matched | Degree 분포 맞춤 샘플링 (플래그) | False
+--ppi-table | PPI 테이블명 (SQLite) | Human_PPI
+--ppi-col-u | PPI 첫 번째 단백질 컬럼명 | protein1
+--ppi-col-v | PPI 두 번째 단백질 컬럼명 | protein2
+--top-n | SES 계산 시 상위 term 개수 | 20
+--q-cut | term 필터링 FDR 컷오프 | 0.05
+--species | STRING species (9606=human) | 9606
+--seed | 난수 시드 | 42
+
+---
+
+## 📄 출력 예시
+
+[STRING][Combined] SES: 0.1167  N_total=80  
+[STRING][Function] SES: 0.0294  N=20  
+[STRING][KEGG] SES: 0.1446  N=20  
+[STRING][Process] SES: 0.1371  N=20  
+[STRING][WikiPathways] SES: 0.1555  N=20  
+
+[STRING][Randomization][Combined] SES= 0.1166  p_emp= 0.09  null_mean= 0.0  null_std= 0.0
+
+---
+
+## 🧬 분석 개요
+1. HERB와 Disease 각각의 target protein ENSP 리스트를 DB에서 로드  
+2. STRING API를 통해 GO/KEGG/Reactome/WikiPathways enrichment 실행  
+3. 각 집합의 상위 term 교집합 기반 SES 계산  
+4. (선택) Randomization Test로 경험적 유의성(p_emp) 산출  
+5. (선택) Category별 SES 리포트와 Combined(가중 평균) 산출  
